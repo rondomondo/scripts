@@ -146,7 +146,7 @@ def construct_RSA_publickey(exponant, modulus):
 
 def main(token):
     u""" the upstream base64 decode routines expect sr types so convert if needed """
-    if type (token) = unicode:
+    if type (token) == unicode:
         token = token.encode('utf-8')
         
     u"""
