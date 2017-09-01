@@ -1,0 +1,119 @@
+Various (somewhat historical) notes on changes to and tweaks of and configuration items modified to get more performance out of nginx and linux.
+
+All of the what follows assumes AWS standard linux AMI and an 8 core instance type.
+
+Process File Descriptor Limit.
+By default there is a default limit of 1024 open file descriptors (a socket being an fd of course). You need to bump this up to a value that works for you.
+
+I used: ulimit -SHn 1048576 to set it dynamically, or via you can set it via config (in more than one place) as detailed below.
+ 
+Message/Payload Size.
+Try to architect/construct your outgoing messages/payload that they fit in one TCP packet. Be careful to take account of any headers for the protocols that wrap the message payload like HTTP. In a nutshell you want the MTU - the headers to be your max payload size. Also read up on MSS.
+
+We want to do this so that the data does not need to be fragmented before send.
+
+Also to match this packet size change disable nagels algorithm so that the TCP stack code does not buffer the sending, so set the NO_DELAY option accordingly. Most stacks now are zero copy so super fast to send if no fragmentation or buffering needed. By default the stack will wait 200 ms before sending to give a buffer a chance to fill up.
+
+NGINX
+Configure the amount of workers to be 2 x the amount of cores. That works ok and does not introduce too much context switching by the CPU. Find out your amount of cpus by typing 'top' and hitting the number 1.
+
+yum --enablerepo=epel install -y lshw
+
+Configure your log buffers to buffer before writing to disk for error and access logs. Eg.
+
+buffer=main flush=5m
+
+Set tcp_nodelay, tcp_nopush nginx options accordingly - see:
+
+https://t37.net/nginx-optimization-understanding-sendfile-tcp_nodelay-and-tcp_nopush.html
+
+Use sendfile option if appropriate.
+
+General
+
+Try to eliminate as many process from running on the same box as nginx as possible. This will reduce CPU cycles not tasked with comms.  Turn off cron.
+
+
+
+System config options - it's a few years since I did this so validate best practice.
+
+
+
+###################### System configuration changes ######################
+
+echo '
+# Allow unlimited number of open files
+*       -        nofile        1048576
+
+' >> /etc/security/limits.conf
+
+echo '
+# Allow unlimited number of processes
+*       hard        nproc         unlimited
+*       soft        nproc         unlimited
+
+' >> /etc/security/limits.d/90-nproc.conf
+
+
+echo '
+#### Customisations ####
+##
+# General gigabit tuning:
+# http://www.metabrew.com/article/a-million-user-comet-application-with-mochiweb-part-1
+
+#  maximum TCP window sizes
+net.core.rmem_max = 16777216
+net.core.wmem_max = 16777216
+
+#  minimum, default, and maximum TCP buffer limits
+net.ipv4.tcp_rmem = 4096 87380 16777216
+net.ipv4.tcp_wmem = 4096 65536 16777216
+
+# this gives the kernel more memory for tcp which you need with many (100k+) open socket connections
+net.ipv4.tcp_mem = 50576   8388608  16777216
+
+# maximum network input buffer queue length
+net.core.netdev_max_backlog = 10000
+
+# Limit of socket listen() backlog
+net.core.somaxconn = 10000
+
+# used by iptables
+net.netfilter.nf_conntrack_max = 1048576
+
+
+#  maximum number of file-handles that the kernel will allocate
+fs.file-max = 1048576
+
+
+## http://www.cyberciti.biz/faq/linux-tcp-tuning/
+## http://fasterdata.es.net/host-tuning/linux/
+
+# Turn on window scaling which can be an option to enlarge the transfer window (default)
+net.ipv4.tcp_window_scaling = 1
+
+# Enable timestamps as defined in RFC1323 (default)
+net.ipv4.tcp_timestamps = 1
+
+# Enable select acknowledgments (default)
+net.ipv4.tcp_sack = 1
+
+
+## https://bitcointalk.org/index.php?topic=6458.745;wap2
+# This will give a reconnection after one minute (60 seconds), and do three probe attempts lasting 10 seconds each.
+
+# the interval between packets sent to validate the TCP connection (down from 75)
+net.ipv4.tcp_keepalive_intvl = 10
+
+# how many seconds to wait for a final FIN packet before the socket is forcibly closed (down from 60)
+net.ipv4.tcp_fin_timeout = 30
+
+# the interval between the last data packet sent and the first keepalive probe (default)
+net.ipv4.tcp_keepalive_time=60
+
+#  the number of probes that are sent and unacknowledged before the client considers the connection broken and notifies the application layer (down from 9)
+net.ipv4.tcp_keepalive_probes=3
+' >> /etc/sysctl.conf
+
+#reload and persist
+/sbin/sysctl -p
