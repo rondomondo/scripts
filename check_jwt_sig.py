@@ -1,5 +1,6 @@
 #!/usr/bin/env python
 import os
+import re
 import time
 import json
 import base64
@@ -75,9 +76,38 @@ def get_token_segments(token):
     return header_json, payload_json, signature_bytes
 
 
+def get_claim(token, name, debug=False):
+    payload_json = get_token_segments(token)[1]
+    value = payload_json.get(name.lower(), None)
+    if debug:
+        if value is None:
+            print("Claim '%s' was not present" % (name))
+        else:
+            print("Claim '%s' contains: %s" % (name, value))
+        if name.lower == 'exp':
+            print "Time now: %s" % (time.strftime('%Y-%m-%d %H:%M:%S',
+                                                  time.localtime(time.time())))
+            print "Expires:  %s" % (time.strftime('%Y-%m-%d %H:%M:%S',
+                                                  time.localtime(value)))
+    return value
+
+testtoken = 'eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCIsImtpZCI6IkhnR0NMQlZNRXBaVG82SUFDM3ZVVWphZCJ9.eyJpc3MiOiJodHRwczovL2F1dGgwLW1vY2suYXdjaHEuY29tLyIsImF1ZCI6WyJodHRwOi8vbG9jYWxob3N0OjUwMDAiLCJodHRwczovL2VuZ2FnZW1lbnQtY2FuYXJ5LmF3Y2hxLmNvbSIsImh0dHBzOi8vYXdjaHEuYXUuYXV0aDAuY29tL3VzZXJpbmZvIl0sImF6cCI6Im1UbWp5bkJJVkFmemR1NVgybjVQTEZ6bUFNRjdMRENuIiwic2NvcGUiOiJvcGVuaWQgcHJvZmlsZSBlbWFpbCBhZGRyZXNzIHBob25lIG9mZmxpbmVfYWNjZXNzIiwiZ3R5IjoicGFzc3dvcmQiLCJpYXQiOjE1MjY5NDg5NTQsImV4cCI6MTUyNjk1Nzk1NCwic3ViIjoiYXV0aDB8VzNpY0F6aUpnSkwxOHoycnp5UnBSWkhhIn0.CHWDh6iuAXLdijp49fyo27mvthsD3KipRQGMcfsnAng7P1Edgh7nD_5IhS6fOeYzJ8hqqIk8QfaoXUQq2zoEaCDH9iY4r6ICdSB-hZA5KgYjd3XtvQxCvhd5GDznD1Zg2dJHnEwI_okOaWRNz76QsyGgvAT_Vc1jaxS-MMg5zB5lNYUYCX1xZTVYrMK-wB5NN2CbYxH3HGhODIGAMf3rEEdfSV9DC5HO71w-3uHCpn1eFfxva8Uyt0eWJOaKRdscoGcRSuRqsQMAFH3zSVjTyKuNNILOtRGz6urd38rKU0IH4gAHa8ui2my1Aq4poku9xlkwlxiaX2MXf9x9vwxAkw'
+
+
+def get_header(token, name, debug=False):
+    payload_json = get_token_segments(token)[0]
+    value = payload_json.get(name.lower(), None)
+    if debug:
+        if value is None:
+            print("Header '%s' was not present" % (name))
+        else:
+            print("Header '%s' contains: %s" % (name, value))
+    return value
+
+
 def get_EXP(token):
     payload_json = get_token_segments(token)[1]
-    exp = payload_json['exp']
+    exp = payload_json.get('exp', None)
     print "Time now: %s" % (time.strftime('%Y-%m-%d %H:%M:%S',
                                           time.localtime(time.time())))
     print "Expires:  %s" % (time.strftime('%Y-%m-%d %H:%M:%S',
@@ -87,13 +117,13 @@ def get_EXP(token):
 
 def get_AUD(token):
     payload_json = get_token_segments(token)[1]
-    aud = payload_json['aud']
+    aud = payload_json.get('aud', None)
     return aud
 
 
 def get_ISS(token):
     payload_json = get_token_segments(token)[1]
-    iss = payload_json['iss']
+    iss = payload_json.get('iss', None)
     return iss
 
 
@@ -124,19 +154,31 @@ def get_modulus_and_exponant(jwk_sets, kid, algorithm, force_fail=False):
 
 
 def get_jwks_json(token):
-    iss = get_ISS(token)
-    url = "%s%s" % (iss, '/.well-known/jwks_uri')
-    print("jwks_uri url: %s" % url)
-    hfn = SHA256.new(url).hexdigest()
-    if not os.path.exists("/tmp/%s" % (hfn)):
-        r = requests.get(url)
-        if r.status_code == 200:
-            with open("/tmp/%s" % (hfn), "w") as outfile:
-                outfile.write(json.dumps(r.json()))
-                return r.json()
+    iss = get_claim(token, "iss")
+    if iss is None:
+        print("No issuer found in token")
+        return
     else:
-        with open("/tmp/%s" % (hfn), "r") as infile:
-            return json.loads(infile.read())
+        m = re.match(("https?:\/\/"), iss)
+        if m:
+            scheme = m.group(0)
+            iss = iss.replace(scheme, "")
+            jwks_names = ["jwks_uri", "jwks.json"]
+            for i, jwks_name in enumerate(jwks_names):
+                url = ("/").join([iss, '.well-known', jwks_name])
+                url = scheme + os.path.normpath(("/").join([iss, '.well-known', jwks_name]))
+                
+                print("checking jwks_uri url (%s): %s" % (i, url))
+                hfn = SHA256.new(url).hexdigest()
+                if not os.path.exists("/tmp/%s" % (hfn)):
+                    r = requests.get(url)
+                    if r.status_code == 200:
+                        with open("/tmp/%s" % (hfn), "w") as outfile:
+                            outfile.write(json.dumps(r.json()))
+                            return r.json()
+                else:
+                    with open("/tmp/%s" % (hfn), "r") as infile:
+                        return json.loads(infile.read())
 
 
 def construct_RSA_publickey(exponant, modulus):
@@ -144,28 +186,33 @@ def construct_RSA_publickey(exponant, modulus):
     return publicKey.publickey().exportKey(), publicKey.publickey()
 
 
-def main(token):
-    u""" the upstream base64 decode routines expect sr types so convert if needed """
-    if type (token) == unicode:
+def main(token, verify=True):
+    u"upstream base64 decode routines expect str types so convert if needed"
+    if type(token) == unicode:
         token = token.encode('utf-8')
-        
     u"""
     Extract the KeyID and some other useful information to validate the token.
 
     See...
 
     http://self-issued.info/docs/draft-jones-json-web-token-01.html#ReservedClaimName
-    
-    Note: For other than this demo case, in real world uses we would obviously not
-    check the validity of AUD, ISS against itself but rather values you expect
-    
+
+    Note: For other than this demo case, in real world uses we would obviously
+    not check the validity of AUD, ISS against itself but rather values you
+    expect
+
 
     """
-    kid = get_KID(token)
-    alg = get_ALG(token)
-    aud = get_AUD(token)
-    get_EXP(token)
-    get_ISS(token)
+    #alg = get_ALG(token)
+    #aud = get_AUD(token)
+    alg = get_header(token, 'alg', True)
+    kid = get_header(token, 'kid', True)
+    get_claim(token, 'exp', True)
+    aud = get_claim(token, 'aud', True)
+    get_claim(token, 'iss', True)
+    #kid = get_KID(token)
+    #get_EXP(token)
+    #get_ISS(token)
 
     u"""
     The AWS Cognito JWT is digitally signed by the private key
@@ -228,13 +275,17 @@ def main(token):
 
     Using the pyjwt module we can now try to decode & verify the token
     #pip install pyjwt
-    
+
     Use the correct AUD, PEM etc., values below as required. In this case they will
     always be right because we just extrated from the token itself.
 
     """
-    payload_decoded_and_verified = jwt.decode(token, pem, audience=aud,
-                                              algorithms=[alg], verify=True)
+    try:
+        payload_decoded_and_verified = jwt.decode(token, pem, audience=aud,
+                                                  algorithms=[alg], verify=verify)
+    except Exception as ex:
+        print(ex)
+        return
 
     u"""
     possible errors/exceptions from pyjwt
@@ -273,7 +324,7 @@ def main(token):
     hash_object = SHA512.new(b'' + header_base64 + b'.' + b'' + payload_base64)
 
     verifier = PKCS1_v1_5.new(publicKey)
-    
+
     u"""
     Notice here it is the hash object and not the digest that is supplied to verify
     """
@@ -284,6 +335,10 @@ def main(token):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--token', help='a JWT or JWS token.', required=True)
+    parser.add_argument('--no-verify', help="Don't bother verifing claims",
+                        default=True, action='store_true')
+    parser.add_argument('--debug', help="Dump some extra decode information",
+                        default=False, action='store_true')
     args = parser.parse_args()
 
-    main(args.token)
+    main(args.token, args.no_verify)
